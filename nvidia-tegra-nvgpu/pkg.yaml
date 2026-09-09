@@ -53,6 +53,24 @@ steps:
           -f /oot-src/out/nvidia-conftest/nvidia/Makefile
         echo "conftest done."
       - |
+        echo "=== DIAG: conftest WITH vs WITHOUT -Werror ==="
+        D=/oot-src/out/nvidia-conftest-noerror
+        mkdir -p ${D}/nvidia
+        cp -a /oot-src/nvidia-oot/scripts/conftest/* ${D}/nvidia/
+        sed -i 's/ -Werror / /' ${D}/nvidia/Makefile
+        echo "--- patched NV_CONFTEST_CFLAGS line:"; grep -n 'NV_CONFTEST_CFLAGS =' ${D}/nvidia/Makefile
+        make -j $(nproc) ARCH=arm64 \
+          src=${D}/nvidia obj=${D}/nvidia LLVM=1 \
+          NV_KERNEL_SOURCES=/src NV_KERNEL_OUTPUT=/src \
+          -f ${D}/nvidia/Makefile
+        for h in macros functions symbols types generic; do
+          echo "--- DIAG diff conftest/${h}.h (Werror -> no-Werror) ---"
+          diff /oot-src/out/nvidia-conftest/nvidia/conftest/${h}.h ${D}/nvidia/conftest/${h}.h || true
+        done
+        echo "--- DIAG defines WITH -Werror ---";    cat /oot-src/out/nvidia-conftest/nvidia/conftest/*.h | grep -E '^#define NV_' | sort
+        echo "--- DIAG defines WITHOUT -Werror ---"; cat ${D}/nvidia/conftest/*.h | grep -E '^#define NV_' | sort
+        echo "=== DIAG END ==="
+      - |
         # Invoked through bash so the build does not depend on the file mode
         # surviving the trip into /pkg.
         bash /pkg/scripts/fixup.sh

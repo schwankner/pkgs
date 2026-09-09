@@ -1,15 +1,17 @@
 #!/bin/bash
-# Cross-compiler mismatch fix: strips GCC-only flags before passing to clang.
+# DIAGNOSTIC BUILD: identical filtering to the PR wrapper, plus stderr logging of
+# every flag it drops or rewrites, to measure whether the wrapper is still needed
+# with a Clang-built kernel (pkgs release-1.13+).
 filtered=()
 for arg in "$@"; do
   case "$arg" in
-    -fmin-function-alignment=*|-fconserve-stack) ;;
-    -fsanitize=bounds-strict) filtered+=("-fsanitize=bounds") ;;
-    -Wimplicit-fallthrough=*) filtered+=("-Wimplicit-fallthrough") ;;
-    -Wno-maybe-uninitialized) filtered+=("-Wno-uninitialized") ;;
-    -Wno-alloc-size-larger-than|-Wno-alloc-size-larger-than=*) ;;
-    -fplugin=*|-fplugin-arg-*) ;;
-    -pg|-mrecord-mcount|-mfentry|-fpatchable-function-entry=*) ;;
+    -fmin-function-alignment=*|-fconserve-stack) echo "CLANG-OOT-DROP: $arg" >&2 ;;
+    -fsanitize=bounds-strict) echo "CLANG-OOT-REWRITE: $arg -> -fsanitize=bounds" >&2; filtered+=("-fsanitize=bounds") ;;
+    -Wimplicit-fallthrough=*) echo "CLANG-OOT-REWRITE: $arg -> -Wimplicit-fallthrough" >&2; filtered+=("-Wimplicit-fallthrough") ;;
+    -Wno-maybe-uninitialized) echo "CLANG-OOT-REWRITE: $arg -> -Wno-uninitialized" >&2; filtered+=("-Wno-uninitialized") ;;
+    -Wno-alloc-size-larger-than|-Wno-alloc-size-larger-than=*) echo "CLANG-OOT-DROP: $arg" >&2 ;;
+    -fplugin=*|-fplugin-arg-*) echo "CLANG-OOT-DROP: $arg" >&2 ;;
+    -pg|-mrecord-mcount|-mfentry|-fpatchable-function-entry=*) echo "CLANG-OOT-DROP: $arg" >&2 ;;
     *) filtered+=("$arg") ;;
   esac
 done
