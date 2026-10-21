@@ -65,8 +65,12 @@ steps:
         mkdir -p $CONFTEST
         cp -a /oot-src/nvidia-oot/scripts/conftest/. $CONFTEST/
         sed -i 's/ -Werror / /' $CONFTEST/Makefile
+        # Kbuild compiles with the kernel's C dialect flags, conftest does not. Since
+        # Linux 6.19 that includes -fms-anonymous-structs, without which every probe
+        # that pulls in linux/fs.h fails.
         make -j$(nproc) -f $CONFTEST/Makefile src=$CONFTEST obj=$CONFTEST \
-          NV_KERNEL_SOURCES=/src NV_KERNEL_OUTPUT=/src
+          NV_KERNEL_SOURCES=/src NV_KERNEL_OUTPUT=/src \
+          EXTRA_CFLAGS="$(sed -n 's/^CONFIG_CC_MS_EXTENSIONS=//p' /src/include/config/auto.conf | tr -d '"')"
         # a probe every 6.3+ kernel must pass: fails the build if conftest is broken
         grep -rq '#define NV_IOMMU_MAP_HAS_GFP_ARG' $CONFTEST/conftest/
       - |

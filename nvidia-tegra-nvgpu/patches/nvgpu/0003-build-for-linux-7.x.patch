@@ -1,0 +1,211 @@
+nvgpu: build for Linux 7.x
+
+Kernel API changes between v6.18 and v7.3. Each change is gated on the
+kernel version, so older kernels build the same code as before.
+
+- v7.2 removed strncpy(). nvgpu relies on its exact semantics (bounded
+  copy, zero padding, no forced terminator) in a dozen places, so a
+  force-included header provides it.
+- v7.1 renamed zap_vma_ptes() to zap_special_vma_range().
+- v7.1 removed <linux/of_gpio.h> and of_get_named_gpio(); look the GPIO
+  up through fwnode_gpiod_get_index() and keep using its number.
+- v7.1 removed clk_ops.round_rate; use determine_rate.
+
+diff --git a/drivers/gpu/nvgpu/Makefile b/drivers/gpu/nvgpu/Makefile
+index 72e0e95..e9d8ffe 100644
+--- a/drivers/gpu/nvgpu/Makefile
++++ b/drivers/gpu/nvgpu/Makefile
+@@ -14,6 +14,7 @@ ccflags-y += -I$(srctree.nvgpu)/drivers/gpu/nvgpu/include
+ ccflags-y += -I$(srctree.nvgpu)/drivers/gpu/nvgpu
+ ccflags-y += -I$(srctree.nvgpu)/include
+ ccflags-y += -I$(srctree.nvgpu)/include/uapi
++ccflags-y += -include $(srctree.nvgpu)/drivers/gpu/nvgpu/include/nvgpu/linux/strncpy.h
+ 
+ ccflags-y += -I$(srctree)/drivers/devfreq
+ 
+diff --git a/drivers/gpu/nvgpu/include/nvgpu/linux/strncpy.h b/drivers/gpu/nvgpu/include/nvgpu/linux/strncpy.h
+new file mode 100644
+index 0000000..12da955
+--- /dev/null
++++ b/drivers/gpu/nvgpu/include/nvgpu/linux/strncpy.h
+@@ -0,0 +1,26 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/*
++ * Linux v7.2 removed strncpy(). nvgpu relies on its exact semantics (copy at
++ * most count bytes, zero-pad the rest, no forced terminator), so provide it.
++ * Force-included for every nvgpu object by the Makefile.
++ */
++#ifndef NVGPU_LINUX_STRNCPY_H
++#define NVGPU_LINUX_STRNCPY_H
++
++#include <linux/version.h>
++
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 2, 0)
++#include <linux/string.h>
++
++static inline char *nvgpu_strncpy(char *dest, const char *src, size_t count)
++{
++	size_t len = strnlen(src, count);
++
++	memcpy(dest, src, len);
++	memset(dest + len, 0, count - len);
++	return dest;
++}
++#define strncpy nvgpu_strncpy
++#endif
++
++#endif
+diff --git a/drivers/gpu/nvgpu/os/linux/dmabuf_nvs.c b/drivers/gpu/nvgpu/os/linux/dmabuf_nvs.c
+index 91f535b..74f8627 100644
+--- a/drivers/gpu/nvgpu/os/linux/dmabuf_nvs.c
++++ b/drivers/gpu/nvgpu/os/linux/dmabuf_nvs.c
+@@ -48,7 +48,9 @@ static int zap_vma_entries(struct gk20a *g, struct vm_area_struct *vma)
+ 		down_write(&vma->vm_mm->mmap_sem);
+ 	#endif
+ 
+-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 18, 0)
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 1, 0)
++		zap_special_vma_range(vma, vma->vm_start, vma->vm_end - vma->vm_start);
++#elif LINUX_VERSION_CODE >= KERNEL_VERSION(4, 18, 0)
+ 		zap_vma_ptes(vma, vma->vm_start, vma->vm_end - vma->vm_start);
+ #else
+ 		err = zap_vma_ptes(vma, vma->vm_start,
+diff --git a/drivers/gpu/nvgpu/os/linux/ioctl_ctrl.c b/drivers/gpu/nvgpu/os/linux/ioctl_ctrl.c
+index 8ce9b30..445161f 100644
+--- a/drivers/gpu/nvgpu/os/linux/ioctl_ctrl.c
++++ b/drivers/gpu/nvgpu/os/linux/ioctl_ctrl.c
+@@ -2918,7 +2918,9 @@ static int alter_usermode_mapping(struct gk20a *g,
+ 	}
+ 
+ 	if (poweroff) {
+-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 18, 0)
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 1, 0)
++		zap_special_vma_range(vma, vma->vm_start, vma->vm_end - vma->vm_start);
++#elif LINUX_VERSION_CODE >= KERNEL_VERSION(4, 18, 0)
+ 		zap_vma_ptes(vma, vma->vm_start, vma->vm_end - vma->vm_start);
+ 		err = 0;
+ #else
+diff --git a/drivers/gpu/nvgpu/os/linux/module.c b/drivers/gpu/nvgpu/os/linux/module.c
+index ae083a0..497675c 100644
+--- a/drivers/gpu/nvgpu/os/linux/module.c
++++ b/drivers/gpu/nvgpu/os/linux/module.c
+@@ -26,7 +26,28 @@
+ #include <linux/platform/tegra/common.h>
+ #endif
+ #include <linux/pci.h>
++#include <linux/version.h>
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 1, 0)
++#include <linux/gpio.h>
++#include <linux/of.h>
++
++/* of_get_named_gpio() was removed in Linux v7.1: look the GPIO up, return its number */
++static inline int nvgpu_of_get_named_gpio(struct device_node *np, const char *con_id, int index)
++{
++	struct gpio_desc *desc = fwnode_gpiod_get_index(of_fwnode_handle(np), con_id,
++							index, GPIOD_ASIS, NULL);
++	int gpio;
++
++	if (IS_ERR(desc))
++		return PTR_ERR(desc);
++	gpio = desc_to_gpio(desc);
++	gpiod_put(desc);
++	return gpio;
++}
++#else
+ #include <linux/of_gpio.h>
++#define nvgpu_of_get_named_gpio(np, con_id, index) of_get_named_gpio(np, con_id "-gpios", index)
++#endif
+ 
+ #include <uapi/linux/nvgpu.h>
+ #ifdef CONFIG_NVGPU_TEGRA_FUSE
+@@ -417,7 +438,7 @@ static int nvgpu_request_therm_irq(struct nvgpu_os_linux *l)
+ 		return -ENOENT;
+ 	}
+ 
+-	gpio = of_get_named_gpio(np, "nvgpu-therm-gpios", index);
++	gpio = nvgpu_of_get_named_gpio(np, "nvgpu-therm", index);
+ 	if (gpio < 0) {
+ 		nvgpu_err(&l->g, "failed to get GPIO %d ", gpio);
+ 		return gpio;
+diff --git a/drivers/gpu/nvgpu/os/linux/pci_power.c b/drivers/gpu/nvgpu/os/linux/pci_power.c
+index 6406eb3..05cbc20 100644
+--- a/drivers/gpu/nvgpu/os/linux/pci_power.c
++++ b/drivers/gpu/nvgpu/os/linux/pci_power.c
+@@ -5,7 +5,28 @@
+ #include <linux/list.h>
+ #include <linux/pci.h>
+ #include <linux/platform_device.h>
++#include <linux/version.h>
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 1, 0)
++#include <linux/gpio.h>
++#include <linux/of.h>
++
++/* of_get_named_gpio() was removed in Linux v7.1: look the GPIO up, return its number */
++static inline int nvgpu_of_get_named_gpio(struct device_node *np, const char *con_id, int index)
++{
++	struct gpio_desc *desc = fwnode_gpiod_get_index(of_fwnode_handle(np), con_id,
++							index, GPIOD_ASIS, NULL);
++	int gpio;
++
++	if (IS_ERR(desc))
++		return PTR_ERR(desc);
++	gpio = desc_to_gpio(desc);
++	gpiod_put(desc);
++	return gpio;
++}
++#else
+ #include <linux/of_gpio.h>
++#define nvgpu_of_get_named_gpio(np, con_id, index) of_get_named_gpio(np, con_id "-gpios", index)
++#endif
+ #include <linux/gpio/consumer.h>
+ #include <linux/ktime.h>
+ #include <linux/debugfs.h>
+@@ -220,7 +241,7 @@ static int nvgpu_request_pci_gpios(struct nvgpu_pci_gpios *pgpios)
+ 	}
+ 
+ 	for (i = 0; i < PCI_GPIO_MAX; i++) {
+-		gpio = of_get_named_gpio(np, "nvgpu-pci-gpios", i);
++		gpio = nvgpu_of_get_named_gpio(np, "nvgpu-pci", i);
+ 		if (gpio < 0) {
+ 			ret = gpio;
+ 			goto err;
+diff --git a/drivers/gpu/nvgpu/os/linux/platform_gk20a_tegra.c b/drivers/gpu/nvgpu/os/linux/platform_gk20a_tegra.c
+index 3ad53e4..a438924 100644
+--- a/drivers/gpu/nvgpu/os/linux/platform_gk20a_tegra.c
++++ b/drivers/gpu/nvgpu/os/linux/platform_gk20a_tegra.c
+@@ -797,12 +797,23 @@ static int gm20b_gpcclk_set_rate_ops(struct clk_hw *hw, unsigned long rate,
+ 	return gm20b_gpcclk_set_rate(clk, rate, parent_rate);
+ }
+ 
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 1, 0)
++/* clk_ops.round_rate was removed in Linux v7.1 */
++static int gm20b_determine_rate_ops(struct clk_hw *hw, struct clk_rate_request *req)
++{
++	struct clk_gk20a *clk = clk_gk20a_from_hw(hw);
++
++	req->rate = gm20b_round_rate(clk, req->rate, &req->best_parent_rate);
++	return 0;
++}
++#else
+ static long gm20b_round_rate_ops(struct clk_hw *hw, unsigned long rate,
+ 			     unsigned long *parent_rate)
+ {
+ 	struct clk_gk20a *clk = clk_gk20a_from_hw(hw);
+ 	return gm20b_round_rate(clk, rate, parent_rate);
+ }
++#endif
+ 
+ static const struct clk_ops gm20b_clk_ops = {
+ 	.prepare = gm20b_clk_prepare_ops,
+@@ -810,7 +821,11 @@ static const struct clk_ops gm20b_clk_ops = {
+ 	.is_prepared = gm20b_clk_is_prepared_ops,
+ 	.recalc_rate = gm20b_recalc_rate_ops,
+ 	.set_rate = gm20b_gpcclk_set_rate_ops,
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 1, 0)
++	.determine_rate = gm20b_determine_rate_ops,
++#else
+ 	.round_rate = gm20b_round_rate_ops,
++#endif
+ };
+ 
+ static int gm20b_register_gpcclk(struct gk20a *g)

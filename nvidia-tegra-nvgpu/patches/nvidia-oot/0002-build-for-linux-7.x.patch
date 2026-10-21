@@ -1,0 +1,122 @@
+nvidia-oot: build for Linux 7.x
+
+Kernel API changes between v6.18 and v7.3 that the modules built here
+hit. Each change is gated on the kernel version, so older kernels build
+the same code as before.
+
+- conftest: the const 'vm_flags' probe checked for the '__vm_flags' union
+  member, which v6.19 renamed to 'flags'. Test the constness of
+  'vm_flags' directly, otherwise nvmap and tegra-drm assign to it.
+- host1x-fence: v7.1 can embed the fence lock in struct dma_fence; use
+  dma_fence_spinlock() instead of fence->lock.
+- tegra-drm: v7.2 renamed struct drm_atomic_state to struct
+  drm_atomic_commit, and drm_print.h is no longer included indirectly.
+
+diff --git a/drivers/gpu/drm/tegra/drm.c b/drivers/gpu/drm/tegra/drm.c
+index e8a8323..aab1b37 100644
+--- a/drivers/gpu/drm/tegra/drm.c
++++ b/drivers/gpu/drm/tegra/drm.c
+@@ -34,6 +34,7 @@
+ #include <drm/drm_framebuffer.h>
+ #include <drm/drm_ioctl.h>
+ #include <drm/drm_prime.h>
++#include <drm/drm_print.h>
+ #include <drm/drm_vblank.h>
+ #include <drm/tegra_drm-next.h>
+ 
+diff --git a/drivers/gpu/drm/tegra/drm.h b/drivers/gpu/drm/tegra/drm.h
+index 1224e96..fc620b5 100644
+--- a/drivers/gpu/drm/tegra/drm.h
++++ b/drivers/gpu/drm/tegra/drm.h
+@@ -11,6 +11,7 @@
+ 
+ #include <linux/host1x-next.h>
+ #include <linux/iova.h>
++#include <linux/version.h>
+ #include <linux/gpio/consumer.h>
+ 
+ #include <drm/drm_atomic.h>
+@@ -22,6 +23,11 @@
+ #include <drm/drm_probe_helper.h>
+ #include <uapi/drm/tegra_drm_next.h>
+ 
++/* Linux v7.2 renamed struct drm_atomic_state to struct drm_atomic_commit */
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(7, 2, 0)
++#define drm_atomic_state drm_atomic_commit
++#endif
++
+ #include "gem.h"
+ #ifdef CONFIG_DRM_TEGRA_HAVE_DISPLAY
+ #include "hub.h"
+diff --git a/drivers/gpu/drm/tegra/fb.c b/drivers/gpu/drm/tegra/fb.c
+index 6ce2cfa..b159237 100644
+--- a/drivers/gpu/drm/tegra/fb.c
++++ b/drivers/gpu/drm/tegra/fb.c
+@@ -14,6 +14,7 @@
+ #include <drm/drm_framebuffer.h>
+ #include <drm/drm_gem_framebuffer_helper.h>
+ #include <drm/drm_modeset_helper.h>
++#include <drm/drm_print.h>
+ 
+ #include "drm.h"
+ #include "gem.h"
+diff --git a/drivers/gpu/host1x-fence/dev.c b/drivers/gpu/host1x-fence/dev.c
+index 2229978..4385b9a 100644
+--- a/drivers/gpu/host1x-fence/dev.c
++++ b/drivers/gpu/host1x-fence/dev.c
+@@ -15,6 +15,12 @@
+ #include <linux/poll.h>
+ #include <linux/slab.h>
+ #include <linux/sync_file.h>
++#include <linux/version.h>
++
++/* Linux v7.1 can embed the fence lock; dma_fence_spinlock() returns either kind */
++#if LINUX_VERSION_CODE < KERNEL_VERSION(7, 1, 0)
++#define dma_fence_spinlock(fence) ((fence)->lock)
++#endif
+ 
+ #include "include/uapi/linux/host1x-fence.h"
+ 
+@@ -214,8 +220,8 @@ static int host1x_pollfd_release(struct inode *inode, struct file *file)
+ 			pfd_fence->callback_set = false;
+ 		}
+ 		/*The lock/unlock just ensures that the callback execution has finished*/
+-		spin_lock(pfd_fence->fence->lock);
+-		spin_unlock(pfd_fence->fence->lock);
++		spin_lock(dma_fence_spinlock(pfd_fence->fence));
++		spin_unlock(dma_fence_spinlock(pfd_fence->fence));
+ 
+ 		dma_fence_put(pfd_fence->fence);
+ 		kfree(pfd_fence);
+@@ -249,8 +255,8 @@ static unsigned int host1x_pollfd_poll(struct file *file, poll_table *wait)
+ 				pfd_fence->callback_set = false;
+ 			}
+ 			/*The lock/unlock just ensures that the callback execution has finished*/
+-			spin_lock(pfd_fence->fence->lock);
+-			spin_unlock(pfd_fence->fence->lock);
++			spin_lock(dma_fence_spinlock(pfd_fence->fence));
++			spin_unlock(dma_fence_spinlock(pfd_fence->fence));
+ 
+ 			dma_fence_put(pfd_fence->fence);
+ 			list_del(&pfd_fence->list);
+diff --git a/scripts/conftest/conftest.sh b/scripts/conftest/conftest.sh
+index a3de933..39b4f79 100755
+--- a/scripts/conftest/conftest.sh
++++ b/scripts/conftest/conftest.sh
+@@ -6229,12 +6229,13 @@ compile_test() {
+             # A union of '__vm_flags' and 'const vm_flags' was added 
+             # by commit bc292ab00f6c ("mm: introduce vma->vm_flags
+             # wrapper functions") from v6.3-rc1 (2023-02-09) in the
+-            # linux kernel tree.
++            # linux kernel tree. Linux v6.19 replaced '__vm_flags' with
++            # 'flags', so test the constness of 'vm_flags' itself.
+             #
+             CODE="
+             #include <linux/mm_types.h>
+-            int conftest_vm_area_struct_has_const_vm_flags(void) {
+-                return offsetof(struct vm_area_struct, __vm_flags);
++            int conftest_vm_area_struct_has_const_vm_flags(struct vm_area_struct *vma) {
++                return _Generic(&vma->vm_flags, const vm_flags_t *: 1);
+             }"
+ 
+             compile_check_conftest "$CODE" "NV_VM_AREA_STRUCT_HAS_CONST_VM_FLAGS" "" "types"
