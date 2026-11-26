@@ -356,6 +356,10 @@ vars:
   tegra_hwpm_ref: 80b966b1bdc20f896cc9625a84708cbbe4638e38
   tegra_hwpm_sha256: 98db24aba32e1140233b0793621a4758dc4f4688670041c12b81c1861a42231a
   tegra_hwpm_sha512: 91444234ef00704dfa11ca9855f7639382ac87c4b4bfb10eaa153dd108d99034a5d494c10e804f2217c52c8135507d876270ddba362cdf586a59a9c9b3e6b226
+  # GA10B GPU firmware from NVIDIA's Jetson Linux r39.2.1 apt repository (component "som")
+  tegra_l4t_firmware_version: 39.2.1-20260806224157
+  tegra_l4t_firmware_sha256: ab95bcddebe7e49accb1a951a32052ec4cf3bb5e54c13407c9f0a89894f58178
+  tegra_l4t_firmware_sha512: 49391627f48bafe6c1ca42d4d38fc096815d31a92d6c90579b0269eda14a17fceb982340b57b7c7a0a39ea403106014010da315b9a4a6786840e9f75298bfcfc
 
   # renovate: datasource=github-releases depName=NVIDIA/gds-nvidia-fs
   gds_nvidia_fs_version: v2.31.5

@@ -23,6 +23,11 @@ steps:
         destination: hwpm.tar.gz
         sha256: "{{ .tegra_hwpm_sha256 }}"
         sha512: "{{ .tegra_hwpm_sha512 }}"
+      # GA10B firmware (nvgpu loads it from nvidia/ga10b/)
+      - url: https://repo.download.nvidia.com/jetson/som/pool/main/n/nvidia-l4t-firmware/nvidia-l4t-firmware_{{ .tegra_l4t_firmware_version }}_arm64.deb
+        destination: nvidia-l4t-firmware.deb
+        sha256: "{{ .tegra_l4t_firmware_sha256 }}"
+        sha512: "{{ .tegra_l4t_firmware_sha512 }}"
     env:
       ARCH: arm64
       LLVM: "1"
@@ -172,6 +177,12 @@ steps:
         # nvhwpm, tegra_hv; nvmap and mc-utils -> tegra_hv; nvgpu -> tegra_hv, nvmap,
         # host1x-fence, mc-utils. tegra-drm registers /dev/dri/renderD128, which libcuda
         # requires to enumerate the iGPU.
+        # GA10B firmware: nvgpu requests nvidia/ga10b/<file> first
+        ar x nvidia-l4t-firmware.deb data.tar.zst
+        tar --zstd -xf data.tar.zst ./lib/firmware/nvidia/ga10b
+        mkdir -p /rootfs/usr/lib/firmware/nvidia
+        cp -a lib/firmware/nvidia/ga10b /rootfs/usr/lib/firmware/nvidia/
+
         mkdir -p /rootfs/usr/lib/modprobe.d
         cat > /rootfs/usr/lib/modprobe.d/nvidia-tegra.conf <<'CONF'
         softdep tegra_hv pre: ivc_ext
@@ -182,6 +193,12 @@ steps:
         softdep tegra-drm pre: tegra_hv host1x host1x-nvhost host1x-fence nvhwpm
         softdep nvgpu pre: tegra_hv host1x host1x-nvhost host1x-fence nvmap tegra-drm mc-utils
         CONF
+    test:
+      - |
+        # https://www.kernel.org/doc/html/v4.15/admin-guide/module-signing.html#signed-modules-and-stripping
+        find /rootfs/usr/lib/modules -name '*.ko' -exec grep -FL '~Module signature appended~' {} \+
+      - |
+        fhs-validator /rootfs
 finalize:
   - from: /rootfs
     to: /
